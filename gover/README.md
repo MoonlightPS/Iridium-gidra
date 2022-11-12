@@ -25,6 +25,17 @@ go run main.go
 
 6. Start the game and have fun!
 
+## For your safety
+MHY will frequently update their resource files, so our hardcoded checksums are not always available. For your account safety, it is recommended that you enable bypass mode.
+
+1. Install [npcap](https://npcap.com/) on windows or [libpcap](https://www.tcpdump.org/) on linux
+
+2. Run `go build -tags bypass` to build the bypass version
+
+3. Run `gover.exe --bypass` on windows or `.\gover --bypass` on linux to enable runtime bypass
+
+4. (Known issue) Make sure your game was the first startup before login, which means you shouldn't logout then re-login without completely quit the game, or will cause capture failed
+
 ## Fiddler Script
 ```cs
 /* Gidra proxy fiddler script */

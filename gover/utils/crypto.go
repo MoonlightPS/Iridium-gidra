@@ -20,11 +20,15 @@ const (
 )
 
 const (
-	CN_KEY      = 2
-	OS_KEY      = 3
-	SIGN_KEY    = 0
-	CN_SIGN_KEY = 4
-	OS_SIGN_KEY = 5
+	CN_KEY       = 2
+	OS_KEY       = 3
+	SIGN_KEY     = 0
+	CN1_KEY      = 4
+	OS1_KEY      = 5
+	CN_SIGN_KEY  = 1000 + 2
+	OS_SIGN_KEY  = 1000 + 3
+	CN1_SIGN_KEY = 1000 + 4
+	OS1_SIGN_KEY = 1000 + 5
 )
 
 // toPrivateKey convert bytes to private key
@@ -86,6 +90,22 @@ func InitKey(p string) error {
 		return err
 	}
 	err = loadKey(OS_SIGN_KEY, path.Join(p, "MHYSignOS.pem"))
+	if err != nil {
+		return err
+	}
+	err = loadKey(CN1_KEY, path.Join(p, "MHYPrivCN1.pem"))
+	if err != nil {
+		return err
+	}
+	err = loadKey(OS1_KEY, path.Join(p, "MHYPrivOS1.pem"))
+	if err != nil {
+		return err
+	}
+	err = loadKey(CN1_SIGN_KEY, path.Join(p, "MHYSignCN1.pem"))
+	if err != nil {
+		return err
+	}
+	err = loadKey(OS1_SIGN_KEY, path.Join(p, "MHYSignOS1.pem"))
 	if err != nil {
 		return err
 	}

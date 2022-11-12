@@ -87,7 +87,7 @@ func (r *Recorder) Start() {
 			// process data
 			d, err := parser.Parse(data.packet)
 			if err != nil {
-				colorlog.Warn("parse packet data failed")
+				colorlog.Warn("parse packet data failed, err: %+v", err)
 				continue
 			}
 
@@ -116,7 +116,7 @@ func (r *Recorder) Start() {
 				Time:      data.time,
 				Object:    body,
 			}
-			colorlog.Info("Record %s -> %s %5d: %s", SourceDesc(data.source^1), pack.Source, data.cmd, pack.ProtoName)
+			colorlog.Info("Record %s -> %s %5d: %s", pack.Source, SourceDesc(data.source^1), data.cmd, pack.ProtoName)
 			r.packets = append(r.packets, pack)
 		}
 		colorlog.Warn("recorder quit")

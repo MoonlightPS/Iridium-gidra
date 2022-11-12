@@ -32,13 +32,16 @@ type KCPConn struct {
 	running    bool
 	keyID      int
 	seed       uint64
+	clientSeed uint64
+	recv       []byte
+	send       []byte
 	once       sync.Once
 }
 
 func (c *KCPConn) Start() {
 	go func() {
 		// recv from server
-		buf := make([]byte, BUFFER_SIZE)
+		buf := make([]byte, 4096)
 		remote, server := c.remote, c.server
 		for {
 			n, err := remote.Read(buf)
@@ -69,12 +72,12 @@ func (c *KCPConn) Start() {
 				continue
 			}
 
-			n = server.Recv(buf)
+			n = server.Recv(c.recv)
 			for n > 0 {
 				packet := make([]byte, n)
-				copy(packet, buf)
+				copy(packet, c.recv)
 				c.sChan <- packet
-				n = server.Recv(buf)
+				n = server.Recv(c.recv)
 			}
 		}
 	}()
@@ -115,7 +118,7 @@ func (c *KCPConn) Start() {
 			// colorlog.Debug("client recv packet cmd:%d, n:%d", cmd, len(packet))
 
 			if handler, ok := handlersMap[cmd]; ok {
-				packet, err = handler(c, packet)
+				packet, err = handler(c, packet, false)
 				if err != nil {
 					colorlog.Error("handle client packet %d failed! err: %+v", cmd, err)
 					continue
@@ -150,7 +153,7 @@ func (c *KCPConn) Start() {
 			// }
 
 			if handler, ok := handlersMap[cmd]; ok {
-				packet, err = handler(c, packet)
+				packet, err = handler(c, packet, false)
 				if err != nil {
 					colorlog.Error("handle server packet %d failed! err: %+v", cmd, err)
 					continue
@@ -175,12 +178,12 @@ func (c *KCPConn) Input(data []byte, size int) int {
 	if res != 0 {
 		return res
 	}
-	n := c.client.Recv(data)
+	n := c.client.Recv(c.send)
 	for n > 0 {
 		packet := make([]byte, n)
-		copy(packet, data)
+		copy(packet, c.send)
 		c.cChan <- packet
-		n = c.client.Recv(data)
+		n = c.client.Recv(c.send)
 	}
 	return 0
 }
@@ -190,9 +193,13 @@ func (c *KCPConn) Close(hs *Handshake) {
 		if hs == nil {
 			hs = NewHandshakePacket(HANDSHAKE_FIN, c.hs.conv, c.hs.token, 1, 0x19419494)
 		}
-		c.remote.Write(hs.Compose())
-		c.remote.Close()
-		c.writeLocal(hs.Compose())
+		if c.remote != nil {
+			c.remote.Write(hs.Compose())
+			c.remote.Close()
+		}
+		if c.writeLocal != nil {
+			c.writeLocal(hs.Compose())
+		}
 		c.running = false
 		close(c.cChan)
 		close(c.sChan)
@@ -289,6 +296,8 @@ func ConstructKCPConn(remote *net.UDPAddr, writeLocal WriteFunc, hs *Handshake, 
 		hs:         handshake,
 		running:    true,
 		keyID:      keyID,
+		recv:       make([]byte, BUFFER_SIZE),
+		send:       make([]byte, BUFFER_SIZE),
 	}
 
 	kConn.Start()
@@ -310,7 +319,7 @@ func (k *KCPSocket) Start() {
 	k.conns = &sync.Map{}
 	go func() {
 		// recv from local
-		buf := make([]byte, BUFFER_SIZE)
+		buf := make([]byte, 4096)
 		local, remote, key, keyID, conns := k.local, k.remote, k.key, k.keyID, k.conns
 		for {
 			n, addr, err := local.ReadFrom(buf)
@@ -369,7 +378,12 @@ func (s *KCPSocket) Stop() {
 	s.conns = nil
 }
 
-func NewKCPSocket(local *net.UDPConn, remote *net.UDPAddr, dispatchKey *utils.PacketKey, keyID int) *KCPSocket {
+type ProxyInterface interface {
+	Start()
+	Stop()
+}
+
+func NewKCPSocket(local *net.UDPConn, remote *net.UDPAddr, dispatchKey *utils.PacketKey, keyID int) ProxyInterface {
 	return &KCPSocket{
 		local:  local,
 		remote: remote,

@@ -17,6 +17,7 @@ import (
 	"github.com/MoonlightPS/Iridium-gidra/gover/ec2b"
 	"github.com/MoonlightPS/Iridium-gidra/gover/gen"
 	"github.com/MoonlightPS/Iridium-gidra/gover/proxy"
+	"github.com/MoonlightPS/Iridium-gidra/gover/proxy/bypass"
 	"github.com/MoonlightPS/Iridium-gidra/gover/utils"
 	"github.com/yezihack/colorlog"
 	"google.golang.org/protobuf/proto"
@@ -26,7 +27,7 @@ const HTTP_LST = ":8081"
 
 type serverDesc struct {
 	addr *net.UDPAddr
-	sock *proxy.KCPSocket
+	sock proxy.ProxyInterface
 }
 
 type regionRsp struct {
@@ -35,6 +36,7 @@ type regionRsp struct {
 }
 
 var gameServers = map[string]*serverDesc{}
+var bypassMode = false
 
 func WaitExit() {
 	c := make(chan os.Signal, 1)
@@ -89,8 +91,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		colorlog.Error("failed request dispatch, err: %+v", err)
 		return
 	}
-
-	regionInfo := &gen.QueryCurrRegionHttpRsp{}
+	originResp := append(make([]byte, 0, len(result)), result...)
 
 	ver := r.URL.Query().Get("version")
 	v2 := strings.Contains(ver, "2.7.5") || strings.Contains(ver, "2.8.") || strings.Contains(ver, "3.")
@@ -127,6 +128,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	regionInfo := &gen.QueryCurrRegionHttpRsp{}
 	err = proto.Unmarshal(result, regionInfo)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -140,7 +142,22 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 			IP:   net.ParseIP(regionInfo.GetRegionInfo().GetGateserverIp()),
 			Port: int(regionInfo.GetRegionInfo().GetGateserverPort()),
 		}
-		if s, ok := gameServers[target.String()]; ok {
+		if bypassMode {
+			keyBytes, err := ec2b.Derive(regionInfo.GetClientSecretKey())
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(err.Error()))
+				colorlog.Error("generate key error, err: %+v", err)
+				return
+			}
+
+			key := utils.NewPacketKey()
+			key.SetKey(keyBytes)
+			sock := proxy.NewBypassSocket(target, key, keyID)
+			sock.Start()
+			gameServers[target.String()] = &serverDesc{addr: nil, sock: sock}
+			colorlog.Info("starting new bypass sniffer on %+v", target)
+		} else if s, ok := gameServers[target.String()]; ok {
 			regionInfo.GetRegionInfo().GateserverIp = s.addr.IP.String()
 			regionInfo.GetRegionInfo().GateserverPort = uint32(s.addr.Port)
 		} else {
@@ -173,31 +190,38 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err = proto.Marshal(regionInfo)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(err.Error()))
-		colorlog.Error("failed marshal region, err: %+v", err)
-		return
+	if bypassMode {
+		result = originResp
+	} else {
+		result, err = proto.Marshal(regionInfo)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(err.Error()))
+			colorlog.Error("failed marshal region, err: %+v", err)
+			return
+		}
 	}
 	if v2 {
-		result, sign, err := utils.EncryptWithSign(result, keyID)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(err.Error()))
-			colorlog.Error("failed enc region, err: %+v", err)
-			return
-		}
-		resp := &regionRsp{
-			Content: base64.StdEncoding.EncodeToString(result),
-			Sign:    base64.StdEncoding.EncodeToString(sign),
-		}
-		result, err = json.Marshal(resp)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(err.Error()))
-			colorlog.Error("failed marshal region json, err: %+v", err)
-			return
+		if !bypassMode {
+			var sign []byte
+			result, sign, err = utils.EncryptWithSign(result, keyID)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(err.Error()))
+				colorlog.Error("failed enc region, err: %+v", err)
+				return
+			}
+			resp := &regionRsp{
+				Content: base64.StdEncoding.EncodeToString(result),
+				Sign:    base64.StdEncoding.EncodeToString(sign),
+			}
+			result, err = json.Marshal(resp)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(err.Error()))
+				colorlog.Error("failed marshal region json, err: %+v", err)
+				return
+			}
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(result)))
 		w.Header().Set("Content-Type", "application/json")
@@ -212,6 +236,18 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	for _, arg := range os.Args {
+		if arg == "--bypass" {
+			bypassMode = true
+			colorlog.Warn("service is running at bypass mode")
+		}
+	}
+	if bypassMode {
+		err = bypass.StartBypassService()
+		if err != nil {
+			panic(err)
+		}
+	}
 	http.HandleFunc("/query_cur_region", indexHandler)
 	go http.ListenAndServe(HTTP_LST, nil)
 	colorlog.Info("running...")
@@ -219,4 +255,5 @@ func main() {
 	for _, v := range gameServers {
 		v.sock.Stop()
 	}
+	bypass.StopBypassService()
 }
