@@ -54,6 +54,9 @@ func SourceDesc(source int) string {
 
 func (r *Recorder) Stop() {
 	r.queue.Close()
+}
+
+func (r *Recorder) save() {
 	content, err := json.MarshalIndent(r.packets, "", "  ")
 	if err != nil {
 		colorlog.Warn("marshaling records failed, err: %+v", err)
@@ -119,6 +122,7 @@ func (r *Recorder) Start() {
 			colorlog.Info("Record %s -> %s %5d: %s", pack.Source, SourceDesc(data.source^1), data.cmd, pack.ProtoName)
 			r.packets = append(r.packets, pack)
 		}
+		r.save()
 		colorlog.Warn("recorder quit")
 	}()
 }

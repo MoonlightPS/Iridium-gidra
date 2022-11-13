@@ -10,33 +10,47 @@ import (
 	"github.com/yezihack/colorlog"
 )
 
-var prng *utils.CompatPrng
-
 func genPrngSeed(seed uint64) uint64 {
 	return utils.NewCompatPrng(int32(seed)).SafeUInt64()
 }
 
 func sniffKey(mSeed, sentMs uint64, packet []byte) uint64 {
 	key := utils.NewPacketKey()
-	buf := make([]byte, 4)
+	buf := make([]byte, len(packet))
 	sniff := func(seed uint64) bool {
 		key.GenKey(seed)
 		copy(buf, packet)
 		key.Xor(buf)
-		if be.Uint16(buf) == 0x4567 {
+		if be.Uint16(buf) == 0x4567 &&
+			be.Uint16(buf[len(buf)-2:]) == 0x89AB {
 			return true
 		}
 		return false
 	}
-	for times := uint64(0); times < 1e4; times++ {
-		seed := genPrngSeed(sentMs+times) ^ mSeed
-		if sniff(seed) {
-			colorlog.Debug("key found, seed: %d", seed)
+	find := func(ts uint64, deep int) uint64 {
+		prng := utils.NewCompatPrng(int32(ts))
+		for times := 0; times < deep; times++ {
+			seed := prng.SafeUInt64() ^ mSeed
+			if sniff(seed) {
+				colorlog.Debug("seed found, seed: %d with ts: %d by times: %d", seed, ts, times)
+				return seed
+			}
+		}
+		return 0
+	}
+	for _, ts := range prngHistory.seeds {
+		if seed := find(ts, 1e4); seed != 0 {
+			colorlog.Debug("seed found from history")
 			return seed
 		}
-		seed = genPrngSeed(sentMs-times) ^ mSeed
-		if sniff(seed) {
-			colorlog.Debug("key found, seed: %d", seed)
+	}
+	for times := uint64(0); times < 1e4; times++ {
+		if seed := find(sentMs+times, 1e3); seed != 0 {
+			saveSeed(sentMs + times)
+			return seed
+		}
+		if seed := find(sentMs-times, 1e3); seed != 0 {
+			saveSeed(sentMs - times)
 			return seed
 		}
 	}
@@ -47,14 +61,20 @@ func sniffKey(mSeed, sentMs uint64, packet []byte) uint64 {
 func (c *KCPConn) StartBypass() {
 	go func() {
 		// process client req
-		ch, recorder, parser, server := c.cChan, c.recorder, c.parser, c.server
+		ch, recorder, parser, server, mu := c.cChan, c.recorder, c.parser, c.server, &c.mu
 		for packet := range ch {
 			// now := time.Now()
+			mu.RLock()
 			cmd, err := parser.ParseCmd(packet)
-			if err != nil && c.clientSeed != 0 {
-				c.seed = sniffKey(c.seed, c.clientSeed, packet)
-				c.key.GenKey(c.seed)
-				c.clientSeed = 0
+			mu.RUnlock()
+			if err != nil {
+				mu.Lock()
+				if c.clientSeed != 0 {
+					c.seed = sniffKey(c.seed, c.clientSeed, packet)
+					c.key.GenKey(c.seed)
+					c.clientSeed = 0
+				}
+				mu.Unlock()
 				cmd, err = parser.ParseCmd(packet)
 			}
 			if err != nil {
@@ -79,10 +99,22 @@ func (c *KCPConn) StartBypass() {
 	}()
 	go func() {
 		// process server rsp
-		ch, recorder, parser, client := c.sChan, c.recorder, c.parser, c.client
+		ch, recorder, parser, client, mu := c.sChan, c.recorder, c.parser, c.client, &c.mu
 		for packet := range ch {
 			// now := time.Now()
+			mu.RLock()
 			cmd, err := parser.ParseCmd(packet)
+			mu.RUnlock()
+			if err != nil {
+				mu.Lock()
+				if c.clientSeed != 0 {
+					c.seed = sniffKey(c.seed, c.clientSeed, packet)
+					c.key.GenKey(c.seed)
+					c.clientSeed = 0
+				}
+				mu.Unlock()
+				cmd, err = parser.ParseCmd(packet)
+			}
 			if err != nil {
 				colorlog.Error("parse server packet failed! err: %+v", err)
 				continue

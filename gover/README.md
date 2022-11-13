@@ -34,7 +34,7 @@ MHY will frequently update their resource files, so our hardcoded checksums are 
 
 3. Run `gover.exe --bypass` on windows or `.\gover --bypass` on linux to enable runtime bypass
 
-4. (Known issue) Make sure your game was the first startup before login, which means you shouldn't logout then re-login without completely quit the game, or will cause capture failed
+4. (Known issue) Make sure your game was the first startup after start bypass mode. If it report decrypt data failed, please logout then completely quit the game and restart to re-login
 
 ## Fiddler Script
 ```cs

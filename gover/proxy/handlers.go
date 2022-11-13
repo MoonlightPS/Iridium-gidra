@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/base64"
+	"sync"
 
 	"github.com/MoonlightPS/Iridium-gidra/gover/gen"
 	"github.com/MoonlightPS/Iridium-gidra/gover/utils"
@@ -14,20 +15,42 @@ var handlersMap = map[int]Handler{}
 
 var b64 = base64.StdEncoding
 
+var prngHistory = struct {
+	seeds []uint64
+	mu    sync.Mutex
+}{}
+
+func saveSeed(seed uint64) {
+	prngHistory.mu.Lock()
+	defer prngHistory.mu.Unlock()
+	prngHistory.seeds = append(prngHistory.seeds, seed)
+}
+
 func sniffSeed(mSeed, sentMs uint64) uint64 {
-	for times := uint64(0); times < 1e4; times++ {
-		seed := genPrngSeed(sentMs + times)
-		if seed == mSeed {
-			colorlog.Debug("seed found, seed: %d", seed)
-			prng = utils.NewCompatPrng(int32(sentMs + times))
-			prng.SafeUInt64()
+	find := func(ts uint64) uint64 {
+		prng := utils.NewCompatPrng(int32(ts))
+		for times := 0; times < 1e5; times++ {
+			seed := prng.SafeUInt64()
+			if seed == mSeed {
+				colorlog.Debug("seed found, seed: %d with ts: %d by times: %d", seed, ts, times)
+				return seed
+			}
+		}
+		return 0
+	}
+	for _, ts := range prngHistory.seeds {
+		if seed := find(ts); seed != 0 {
+			colorlog.Debug("seed found from history")
 			return seed
 		}
-		seed = genPrngSeed(sentMs - times)
-		if seed == mSeed {
-			colorlog.Debug("seed found, seed: %d", seed)
-			prng = utils.NewCompatPrng(int32(sentMs - times))
-			prng.SafeUInt64()
+	}
+	for times := uint64(0); times < 1e5; times++ {
+		if seed := find(sentMs + times); seed != 0 {
+			saveSeed(sentMs + times)
+			return seed
+		}
+		if seed := find(sentMs - times); seed != 0 {
+			saveSeed(sentMs - times)
 			return seed
 		}
 	}

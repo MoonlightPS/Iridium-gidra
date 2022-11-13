@@ -36,6 +36,7 @@ type KCPConn struct {
 	recv       []byte
 	send       []byte
 	once       sync.Once
+	mu         sync.RWMutex
 }
 
 func (c *KCPConn) Start() {
