@@ -21,7 +21,7 @@ func sniffKey(mSeed, sentMs uint64, packet []byte) uint64 {
 		k.Seed(seed)
 		k.Seed(k.Int64())
 		k.Int64()
-		return (v^k.Int64())&0xFFFF0000FF00FFFF == 0x4567000000000000
+		return v^k.Int64()&0xFFFF0000FF00FFFF == 0x4567000000000000
 	}
 	find := func(ts uint64, deep int) uint64 {
 		prng := utils.NewCompatPrng(int32(ts))
